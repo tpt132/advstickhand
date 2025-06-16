@@ -1,112 +1,247 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>AI Stickhandling Trainer</title>
-  <style>
-    body, html { margin:0; padding:0; height:100%; overflow:hidden; background:#000; color:#fff; }
-    #video, #canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
-    #ui { position:absolute; top:10px; left:10px; z-index:10; }
-    button { font-size:18px; padding:8px 16px; margin-right:8px; }
-    #status { margin-top:8px; font-size:24px; }
-  </style>
+<meta charset="UTF-8" />
+<title>Adjustable Grid Stickhandling Trainer</title>
+<style>
+  body, html { margin:0; padding:0; height:100%; overflow:hidden; background:#000; color:#fff; }
+  #video, #canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
+  #ui { position:absolute; top:10px; left:10px; z-index:10; }
+  button { font-size:18px; padding:8px 16px; margin-right:8px; }
+  #status { margin-top:8px; font-size:24px; }
+</style>
 </head>
 <body>
-  <div id="ui">
-    <button onclick="start()">Start</button>
-    <button onclick="stop()">Stop</button>
-    <div id="status"></div>
+<div id="ui">
+  <button onclick="start()">Start</button>
+  <button onclick="stop()">Stop</button>
+  <div id="status"></div>
+  <div style="margin-top:10px; font-size:14px; max-width:320px; color:#ccc;">
+    Drag vertical lines left/right and horizontal lines up/down to fit your tiles.
   </div>
-  <video id="video" autoplay muted playsinline></video>
-  <canvas id="canvas"></canvas>
+</div>
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
 
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@latest"></script>
-  <script>
-  let model, video, canvas, ctx;
-  let targetZone = null, speaking = false;
-  let zoneHit = false;
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@latest"></script>
 
-  async function start() {
-    if (!model) {
-      status('Loading model...');
-      model = await cocoSsd.load();
-      status('Model ready!');
-    }
-    video = document.getElementById('video');
-    canvas = document.getElementById('canvas');
-    ctx = canvas.getContext('2d');
+<script>
+let model, video, canvas, ctx;
+let targetZone = null, speaking = false, zoneHit = false;
 
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    video.srcObject = stream;
-    video.addEventListener('loadeddata', () => {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      nextRound();
-      requestAnimationFrame(detectLoop);
-    });
+let verticalLines = [];
+let horizontalLines = [];
+
+const dragRadius = 15;
+let draggingLine = null; // {type:'v'|'h', index:0|1}
+let dragOffset = 0;
+
+async function start() {
+  if (!model) {
+    status('Loading model...');
+    model = await cocoSsd.load();
+    status('Model ready!');
   }
+  video = document.getElementById('video');
+  canvas = document.getElementById('canvas');
+  ctx = canvas.getContext('2d');
 
-  function stop() {
-    if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    status('');
-    targetZone = null;
-  }
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+  video.srcObject = stream;
+  video.addEventListener('loadeddata', () => {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-  function status(msg) {
-    document.getElementById('status').innerText = msg;
-  }
+    // Initialize grid lines at equal thirds:
+    verticalLines = [canvas.width / 3, (canvas.width / 3) * 2];
+    horizontalLines = [canvas.height / 3, (canvas.height / 3) * 2];
 
-  function say(text) {
-    if (!speaking) {
-      speaking = true;
-      const u = new SpeechSynthesisUtterance(text);
-      u.onend = () => speaking = false;
-      speechSynthesis.speak(u);
-    }
-  }
-
-  function nextRound() {
-    zoneHit = false;
-    targetZone = Math.floor(Math.random() * 9) + 1;
-    status('Target: ' + targetZone);
-    say(targetZone);
-  }
-
-  async function detectLoop() {
-    if (!model || !video.srcObject) return;
-    const preds = await model.detect(video);
-    ctx.drawImage(video, 0, 0);
-
-    // draw boxes
-    preds.forEach(p => {
-      if (p.class === 'sports ball' && p.score > 0.5) {
-        const [x, y, w, h] = p.bbox;
-        ctx.strokeStyle = 'lime';
-        ctx.lineWidth = 4;
-        ctx.strokeRect(x, y, w, h);
-        const cx = x + w/2, cy = y + h/2;
-
-        // map to grid 1–9
-        const col = Math.floor(cx / canvas.width * 3);
-        const row = Math.floor(cy / canvas.height * 3);
-        const zone = row * 3 + col + 1;
-
-        ctx.fillStyle = 'yellow';
-        ctx.font = '30px Arial';
-        ctx.fillText(zone, cx, cy - 10);
-
-        if (!zoneHit && zone === targetZone) {
-          zoneHit = true;
-          say('Good');
-          setTimeout(nextRound, 1000);
-        }
-      }
-    });
-
+    nextRound();
     requestAnimationFrame(detectLoop);
+  });
+
+  // Setup mouse and touch event handlers for dragging grid lines
+  canvas.addEventListener('mousedown', onPointerDown);
+  canvas.addEventListener('touchstart', onPointerDown);
+
+  window.addEventListener('mouseup', onPointerUp);
+  window.addEventListener('touchend', onPointerUp);
+
+  window.addEventListener('mousemove', onPointerMove);
+  window.addEventListener('touchmove', onPointerMove);
+}
+
+function stop() {
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  status('');
+  targetZone = null;
+
+  // Remove event listeners to avoid leaks or multiple listeners
+  canvas.removeEventListener('mousedown', onPointerDown);
+  canvas.removeEventListener('touchstart', onPointerDown);
+
+  window.removeEventListener('mouseup', onPointerUp);
+  window.removeEventListener('touchend', onPointerUp);
+
+  window.removeEventListener('mousemove', onPointerMove);
+  window.removeEventListener('touchmove', onPointerMove);
+}
+
+function status(msg) {
+  document.getElementById('status').innerText = msg;
+}
+
+function say(text) {
+  if (!speaking) {
+    speaking = true;
+    const u = new SpeechSynthesisUtterance(text);
+    u.onend = () => speaking = false;
+    speechSynthesis.speak(u);
   }
-  </script>
+}
+
+function nextRound() {
+  zoneHit = false;
+  targetZone = Math.floor(Math.random() * 9) + 1;
+  status('Target: ' + targetZone);
+  say(targetZone);
+}
+
+async function detectLoop() {
+  if (!model || !video.srcObject) return;
+  const preds = await model.detect(video);
+  ctx.drawImage(video, 0, 0);
+
+  // Draw adjustable grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 3;
+
+  verticalLines.forEach(x => {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvas.height);
+    ctx.stroke();
+  });
+  horizontalLines.forEach(y => {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+  });
+
+  // Draw puck detection boxes and zone numbers
+  preds.forEach(p => {
+    if (p.class === 'sports ball' && p.score > 0.5) {
+      const [x, y, w, h] = p.bbox;
+      ctx.strokeStyle = 'lime';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(x, y, w, h);
+      const cx = x + w/2, cy = y + h/2;
+
+      // Map cx, cy to zone using adjusted grid
+      const col = getCol(cx);
+      const row = getRow(cy);
+      if (col === -1 || row === -1) return; // outside grid
+
+      const zone = row * 3 + col + 1;
+
+      ctx.fillStyle = 'yellow';
+      ctx.font = '30px Arial';
+      ctx.fillText(zone, cx, cy - 10);
+
+      if (!zoneHit && zone === targetZone) {
+        zoneHit = true;
+        say('Good');
+        setTimeout(nextRound, 1000);
+      }
+    }
+  });
+
+  requestAnimationFrame(detectLoop);
+}
+
+// Helpers to get column and row based on grid lines
+function getCol(x) {
+  if (x < verticalLines[0]) return 0;
+  else if (x < verticalLines[1]) return 1;
+  else if (x <= canvas.width) return 2;
+  return -1;
+}
+
+function getRow(y) {
+  if (y < horizontalLines[0]) return 0;
+  else if (y < horizontalLines[1]) return 1;
+  else if (y <= canvas.height) return 2;
+  return -1;
+}
+
+// Drag handlers
+
+function pointerPos(e) {
+  if (e.touches) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  return { x: e.clientX, y: e.clientY };
+}
+
+function onPointerDown(e) {
+  e.preventDefault();
+  const pos = pointerPos(e);
+  const rect = canvas.getBoundingClientRect();
+  const x = pos.x - rect.left;
+  const y = pos.y - rect.top;
+
+  // Check proximity to vertical lines
+  for (let i = 0; i < verticalLines.length; i++) {
+    if (Math.abs(x - verticalLines[i]) < dragRadius) {
+      draggingLine = { type: 'v', index: i };
+      dragOffset = x - verticalLines[i];
+      return;
+    }
+  }
+  // Check proximity to horizontal lines
+  for (let i = 0; i < horizontalLines.length; i++) {
+    if (Math.abs(y - horizontalLines[i]) < dragRadius) {
+      draggingLine = { type: 'h', index: i };
+      dragOffset = y - horizontalLines[i];
+      return;
+    }
+  }
+}
+
+function onPointerMove(e) {
+  if (!draggingLine) return;
+  e.preventDefault();
+  const pos = pointerPos(e);
+  const rect = canvas.getBoundingClientRect();
+  const x = pos.x - rect.left;
+  const y = pos.y - rect.top;
+
+  if (draggingLine.type === 'v') {
+    // Clamp lines inside canvas and respect order (x0 < x1)
+    let newX = x - dragOffset;
+    newX = Math.max(10, Math.min(newX, canvas.width - 10));
+    if (draggingLine.index === 0) {
+      newX = Math.min(newX, verticalLines[1] - 20);
+    } else {
+      newX = Math.max(newX, verticalLines[0] + 20);
+    }
+    verticalLines[draggingLine.index] = newX;
+  } else if (draggingLine.type === 'h') {
+    let newY = y - dragOffset;
+    newY = Math.max(10, Math.min(newY, canvas.height - 10));
+    if (draggingLine.index === 0) {
+      newY = Math.min(newY, horizontalLines[1] - 20);
+    } else {
+      newY = Math.max(newY, horizontalLines[0] + 20);
+    }
+    horizontalLines[draggingLine.index] = newY;
+  }
+}
+
+function onPointerUp(e) {
+  draggingLine = null;
+}
+</script>
 </body>
 </html>
