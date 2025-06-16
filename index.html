@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Puck Tracking Stickhandling</title>
+  <style>
+    body, html { margin:0; padding:0; height:100%; overflow:hidden; }
+    #video, #canvas { position:absolute; width:100%; height:100%; object-fit:cover;}
+    #ui { position:absolute; top:10px; left:10px; z-index:10; color:white; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <button onclick="start()">Start</button>
+    <button onclick="stop()">Stop</button>
+    <div id="status"></div>
+  </div>
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    let stream, loop, targetZone;
+
+    function say(text) {
+      speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    }
+
+    function start() {
+      targetZone = Math.floor(Math.random()*9)+1;
+      statusEl.textContent = 'Target: '+targetZone;
+      say(targetZone);
+      navigator.mediaDevices.getUserMedia({video:true}).then(s => {
+        stream = s;
+        video.srcObject = s;
+        loop = requestAnimationFrame(track);
+      });
+    }
+
+    function stop() {
+      cancelAnimationFrame(loop);
+      if(stream) stream.getTracks().forEach(t=>t.stop());
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      statusEl.textContent = '';
+    }
+
+    function track() {
+      if(video.readyState === 4) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        let data = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+        let sumX=0, sumY=0, count=0;
+        for(let i=0;i<data.length;i+=4) {
+          let r=data[i], g=data[i+1], b=data[i+2];
+          if(b > 150 && r < 100 && g < 100) { // green puck detection
+            let idx = i/4;
+            let x = idx % canvas.width;
+            let y = Math.floor(idx / canvas.width);
+            sumX += x; sumY += y; count++;
+          }
+        }
+        if(count>200) {
+          let avgX = sumX/count, avgY = sumY/count;
+          ctx.beginPath();
+          ctx.arc(avgX, avgY, 20, 0, 2*Math.PI);
+          ctx.strokeStyle = 'red'; ctx.lineWidth = 5;
+          ctx.stroke();
+
+          // map to 1–9 zone
+          const col = Math.floor(avgX/canvas.width*3);
+          const row = Math.floor(avgY/canvas.height*3);
+          const zone = row*3 + col + 1;
+          ctx.font = "30px Arial";
+          ctx.fillStyle = 'yellow';
+          ctx.fillText(zone, avgX, avgY-30);
+
+          if(zone === targetZone) {
+            statusEl.textContent = "✅ Good!";
+          } else {
+            statusEl.textContent = "❌ Missed " + zone;
+          }
+        }
+      }
+      loop = requestAnimationFrame(track);
+    }
+  </script>
+</body>
+</html>
