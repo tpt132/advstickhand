@@ -1,108 +1,42 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<title>Blue Puck Tracker</title>
-<style>
-  video, canvas {
-    position: absolute;
-    top: 0; left: 0;
-    width: 640px; height: 480px;
+// Convert RGB to HSV helper (values 0-360 for H, 0-1 for S and V)
+function rgbToHsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  let max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, v = max;
+
+  let d = max - min;
+  s = max === 0 ? 0 : d / max;
+
+  if (max === min) {
+    h = 0; // achromatic
+  } else {
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
   }
-  canvas {
-    pointer-events: none;
-  }
-</style>
-</head>
-<body>
-<video id="video" autoplay playsinline></video>
-<canvas id="canvas"></canvas>
 
-<script>
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-
-canvas.width = 640;
-canvas.height = 480;
-
-navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
-  video.srcObject = stream;
-});
-
-function hexToRgb(hex) {
-  const bigint = parseInt(hex.slice(1), 16);
   return {
-    r: (bigint >> 16) & 255,
-    g: (bigint >> 8) & 255,
-    b: bigint & 255
+    h: h * 360,
+    s: s,
+    v: v
   };
 }
 
-// Target blue colors from your hex codes:
-const blueColors = [
-  hexToRgb('#19224f'),
-  hexToRgb('#0a2e6c')
-];
+// Define your puck's hue range in degrees (tweak as needed)
+const targetHueMin = 200; // ~blue range start
+const targetHueMax = 240; // ~blue range end
+const minSaturation = 0.4; // avoid low saturation colors (grayish)
+const minValue = 0.2; // avoid very dark pixels
 
-// Simple helper to check if a pixel is "close" to one of target blues
-function isBluePixel(r, g, b) {
-  // Euclidean distance in RGB space to each blue, threshold tuned manually
-  const threshold = 60;
-  for (const c of blueColors) {
-    const dist = Math.sqrt(
-      (r - c.r)**2 + (g - c.g)**2 + (b - c.b)**2
-    );
-    if (dist < threshold) return true;
-  }
-  return false;
+function isBluePixelHSV(r, g, b) {
+  const hsv = rgbToHsv(r, g, b);
+  return (
+    hsv.h >= targetHueMin &&
+    hsv.h <= targetHueMax &&
+    hsv.s >= minSaturation &&
+    hsv.v >= minValue
+  );
 }
-
-function trackBluePuck() {
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = frame.data;
-
-  let count = 0;
-  let sumX = 0;
-  let sumY = 0;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-
-    if (isBluePixel(r, g, b)) {
-      const pixelIndex = i / 4;
-      const x = pixelIndex % canvas.width;
-      const y = Math.floor(pixelIndex / canvas.width);
-      sumX += x;
-      sumY += y;
-      count++;
-    }
-  }
-
-  if (count > 100) { // Minimum pixels to count as detected
-    const avgX = sumX / count;
-    const avgY = sumY / count;
-
-    // Draw a circle on the detected puck position
-    ctx.beginPath();
-    ctx.arc(avgX, avgY, 15, 0, 2 * Math.PI);
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = 'red';
-    ctx.stroke();
-
-    // Optional: log puck position
-    console.log(`Puck detected at: (${Math.round(avgX)}, ${Math.round(avgY)})`);
-  }
-
-  requestAnimationFrame(trackBluePuck);
-}
-
-video.addEventListener('playing', () => {
-  trackBluePuck();
-});
-</script>
-</body>
-</html>
