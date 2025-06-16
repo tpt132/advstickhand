@@ -1,11 +1,14 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Puck Tracking Stickhandling</title>
+  <meta charset="UTF-8">
+  <title>AI Stickhandling Trainer</title>
   <style>
-    body, html { margin:0; padding:0; height:100%; overflow:hidden; }
-    #video, #canvas { position:absolute; width:100%; height:100%; object-fit:cover;}
-    #ui { position:absolute; top:10px; left:10px; z-index:10; color:white; }
+    body, html { margin:0; padding:0; height:100%; overflow:hidden; background:#000; color:#fff; }
+    #video, #canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
+    #ui { position:absolute; top:10px; left:10px; z-index:10; }
+    button { font-size:18px; padding:8px 16px; margin-right:8px; }
+    #status { margin-top:8px; font-size:24px; }
   </style>
 </head>
 <body>
@@ -17,75 +20,93 @@
   <video id="video" autoplay muted playsinline></video>
   <canvas id="canvas"></canvas>
 
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@latest"></script>
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const statusEl = document.getElementById('status');
-    let stream, loop, targetZone;
+  let model, video, canvas, ctx;
+  let targetZone = null, speaking = false;
+  let zoneHit = false;
 
-    function say(text) {
-      speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  async function start() {
+    if (!model) {
+      status('Loading model...');
+      model = await cocoSsd.load();
+      status('Model ready!');
     }
+    video = document.getElementById('video');
+    canvas = document.getElementById('canvas');
+    ctx = canvas.getContext('2d');
 
-    function start() {
-      targetZone = Math.floor(Math.random()*9)+1;
-      statusEl.textContent = 'Target: '+targetZone;
-      say(targetZone);
-      navigator.mediaDevices.getUserMedia({video:true}).then(s => {
-        stream = s;
-        video.srcObject = s;
-        loop = requestAnimationFrame(track);
-      });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+    video.addEventListener('loadeddata', () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      nextRound();
+      requestAnimationFrame(detectLoop);
+    });
+  }
+
+  function stop() {
+    if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    status('');
+    targetZone = null;
+  }
+
+  function status(msg) {
+    document.getElementById('status').innerText = msg;
+  }
+
+  function say(text) {
+    if (!speaking) {
+      speaking = true;
+      const u = new SpeechSynthesisUtterance(text);
+      u.onend = () => speaking = false;
+      speechSynthesis.speak(u);
     }
+  }
 
-    function stop() {
-      cancelAnimationFrame(loop);
-      if(stream) stream.getTracks().forEach(t=>t.stop());
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      statusEl.textContent = '';
-    }
+  function nextRound() {
+    zoneHit = false;
+    targetZone = Math.floor(Math.random() * 9) + 1;
+    status('Target: ' + targetZone);
+    say(targetZone);
+  }
 
-    function track() {
-      if(video.readyState === 4) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-        let data = ctx.getImageData(0,0,canvas.width,canvas.height).data;
-        let sumX=0, sumY=0, count=0;
-        for(let i=0;i<data.length;i+=4) {
-          let r=data[i], g=data[i+1], b=data[i+2];
-          if(b > 150 && r < 100 && g < 100) { // green puck detection
-            let idx = i/4;
-            let x = idx % canvas.width;
-            let y = Math.floor(idx / canvas.width);
-            sumX += x; sumY += y; count++;
-          }
-        }
-        if(count>200) {
-          let avgX = sumX/count, avgY = sumY/count;
-          ctx.beginPath();
-          ctx.arc(avgX, avgY, 20, 0, 2*Math.PI);
-          ctx.strokeStyle = 'red'; ctx.lineWidth = 5;
-          ctx.stroke();
+  async function detectLoop() {
+    if (!model || !video.srcObject) return;
+    const preds = await model.detect(video);
+    ctx.drawImage(video, 0, 0);
 
-          // map to 1–9 zone
-          const col = Math.floor(avgX/canvas.width*3);
-          const row = Math.floor(avgY/canvas.height*3);
-          const zone = row*3 + col + 1;
-          ctx.font = "30px Arial";
-          ctx.fillStyle = 'yellow';
-          ctx.fillText(zone, avgX, avgY-30);
+    // draw boxes
+    preds.forEach(p => {
+      if (p.class === 'sports ball' && p.score > 0.5) {
+        const [x, y, w, h] = p.bbox;
+        ctx.strokeStyle = 'lime';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(x, y, w, h);
+        const cx = x + w/2, cy = y + h/2;
 
-          if(zone === targetZone) {
-            statusEl.textContent = "✅ Good!";
-          } else {
-            statusEl.textContent = "❌ Missed " + zone;
-          }
+        // map to grid 1–9
+        const col = Math.floor(cx / canvas.width * 3);
+        const row = Math.floor(cy / canvas.height * 3);
+        const zone = row * 3 + col + 1;
+
+        ctx.fillStyle = 'yellow';
+        ctx.font = '30px Arial';
+        ctx.fillText(zone, cx, cy - 10);
+
+        if (!zoneHit && zone === targetZone) {
+          zoneHit = true;
+          say('Good');
+          setTimeout(nextRound, 1000);
         }
       }
-      loop = requestAnimationFrame(track);
-    }
+    });
+
+    requestAnimationFrame(detectLoop);
+  }
   </script>
 </body>
 </html>
