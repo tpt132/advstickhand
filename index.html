@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Tap-to-Draw Grid Stickhandling Trainer</title>
+<title>Stickhandling Trainer with Tap Grid</title>
 <style>
   body, html {
     margin: 0; padding: 0; overflow: hidden; background: #000; color: #fff;
@@ -81,6 +81,8 @@ async function start() {
     requestAnimationFrame(detectLoop);
   });
 
+  // Make sure click listener is added only once
+  canvas.removeEventListener('click', onCanvasClick);
   canvas.addEventListener('click', onCanvasClick);
 }
 
@@ -88,11 +90,12 @@ function stop() {
   if (video && video.srcObject) {
     video.srcObject.getTracks().forEach(t => t.stop());
   }
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
   status('');
   targetZone = null;
   verticalLines = [];
   horizontalLines = [];
+  placingVertical = true;
   canvas.removeEventListener('click', onCanvasClick);
 }
 
@@ -128,10 +131,14 @@ function nextRound() {
 }
 
 async function detectLoop() {
-  if (!model || !video.srcObject) return;
+  if (!model || !video.srcObject) {
+    requestAnimationFrame(detectLoop);
+    return;
+  }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  // Draw grid lines
+  // Draw grid lines every frame if defined
   ctx.strokeStyle = 'rgba(255,255,255,0.8)';
   ctx.lineWidth = 3;
   verticalLines.sort((a,b)=>a-b).forEach(x => {
@@ -201,18 +208,22 @@ function onCanvasClick(e) {
   const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
   if (placingVertical) {
-    verticalLines.push(x);
-    status(`Vertical lines set: ${verticalLines.length}/2`);
-    if (verticalLines.length === 2) {
-      placingVertical = false;
-      status('Tap twice to place 2 horizontal lines');
+    if (verticalLines.length < 2) {
+      verticalLines.push(x);
+      status(`Vertical lines set: ${verticalLines.length}/2`);
+      if (verticalLines.length === 2) {
+        placingVertical = false;
+        status('Tap twice to place 2 horizontal lines');
+      }
     }
   } else {
-    horizontalLines.push(y);
-    status(`Horizontal lines set: ${horizontalLines.length}/2`);
-    if (horizontalLines.length === 2) {
-      status('Grid set! Starting puck detection.');
-      nextRound();
+    if (horizontalLines.length < 2) {
+      horizontalLines.push(y);
+      status(`Horizontal lines set: ${horizontalLines.length}/2`);
+      if (horizontalLines.length === 2) {
+        status('Grid set! Starting puck detection.');
+        nextRound();
+      }
     }
   }
 }
